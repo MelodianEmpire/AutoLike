@@ -1,3 +1,7 @@
+// Fix for Railway/older Node.js environments
+const crypto = require('crypto');
+if (!globalThis.crypto) globalThis.crypto = crypto;
+
 const express = require('express');
 const {
   makeWASocket,
@@ -83,6 +87,9 @@ function sleep(ms) {
 }
 
 // ─── WhatsApp Connection ──────────────────────────────────
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 5;
+
 async function connectWhatsApp(phoneNumber = null) {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   const { version } = await fetchLatestBaileysVersion();
@@ -116,9 +123,15 @@ async function connectWhatsApp(phoneNumber = null) {
 
       log(`Brainbox: Connection closed (code: ${statusCode}). Reconnect: ${shouldReconnect}`);
 
-      if (shouldReconnect) {
-        await sleep(5000);
+      if (shouldReconnect && reconnectAttempts < MAX_RECONNECT) {
+        reconnectAttempts++;
+        const backoff = reconnectAttempts * 8000; // 8s, 16s, 24s...
+        log(`Brainbox: Reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT} in ${backoff/1000}s...`);
+        await sleep(backoff);
         connectWhatsApp();
+      } else if (reconnectAttempts >= MAX_RECONNECT) {
+        log('Brainbox: Max reconnects reached. Please re-pair via dashboard.');
+        reconnectAttempts = 0;
       } else {
         log('Brainbox: Logged out. Please re-authenticate via the dashboard.');
         // Clear auth on logout
@@ -128,6 +141,7 @@ async function connectWhatsApp(phoneNumber = null) {
       }
     } else if (connection === 'open') {
       isConnected = true;
+      reconnectAttempts = 0; // Reset on successful connect
       log(`Brainbox: WhatsApp connected ✓ | Logged in as ${sock.user?.name || sock.user?.id}`);
       broadcast({ type: 'connected', name: sock.user?.name });
     } else if (connection === 'connecting') {
