@@ -1,6 +1,6 @@
-// Fix for Railway/older Node.js environments
+// Polyfill crypto for older Node environments (Railway fix)
 const crypto = require('crypto');
-if (!globalThis.crypto) globalThis.crypto = crypto;
+if (!globalThis.crypto) globalThis.crypto = crypto.webcrypto || crypto;
 
 const express = require('express');
 const {
@@ -10,7 +10,6 @@ const {
   DisconnectReason,
   makeCacheableSignalKeyStore
 } = require('@whiskeysockets/baileys');
-const { Boom } = require('@hapi/boom');
 const WebSocket = require('ws');
 const path = require('path');
 const fs = require('fs');
@@ -22,7 +21,7 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// ─── State ───────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────
 let logs = [];
 let dailyCount = 0;
 let lastResetDate = new Date().toDateString();
@@ -30,357 +29,251 @@ let isRunning = false;
 let sock = null;
 let cycleTimeout = null;
 let isConnected = false;
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 5;
 
 // ─── WebSocket Server ─────────────────────────────────────
 const wss = new WebSocket.Server({ noServer: true });
 
 function broadcast(data) {
   wss.clients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(JSON.stringify(data));
-    }
+    if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(data));
   });
-}
-
-function log(message) {
-  const now = new Date();
-
-  // Reset daily count at midnight (Nigeria time = UTC+1)
-  const today = now.toDateString();
-  if (today !== lastResetDate) {
-    dailyCount = 0;
-    lastResetDate = today;
-    addLog('Brainbox: Daily counter reset. New day started.');
-  }
-
-  addLog(message);
 }
 
 function addLog(message) {
   const now = new Date();
+  const today = now.toDateString();
+  if (today !== lastResetDate) { dailyCount = 0; lastResetDate = today; }
+
   const timestamp = now.toLocaleString('en-NG', {
     timeZone: 'Africa/Lagos',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
   });
 
   const entry = `[${timestamp}] ${message}`;
   logs.push(entry);
-  if (logs.length > 500) logs.shift(); // Keep last 500 logs
-
+  if (logs.length > 500) logs.shift();
   broadcast({ type: 'log', message: entry, dailyCount });
   console.log(entry);
 }
 
-// ─── Helpers ──────────────────────────────────────────────
-function randomDelay(minMs, maxMs) {
-  return Math.floor(Math.random() * (maxMs - minMs)) + minMs;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const randomDelay = (a, b) => Math.floor(Math.random() * (b - a)) + a;
+
+function cleanPhone(raw) {
+  let p = String(raw).replace(/\D/g, '');
+  if (p.startsWith('0')) p = '234' + p.slice(1);
+  else if (!p.startsWith('234')) p = '234' + p;
+  return p;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+function killSocket() {
+  if (!sock) return;
+  try { sock.ev.removeAllListeners(); } catch (_) {}
+  try { sock.end(new Error('kill')); } catch (_) {}
+  sock = null;
 }
 
-// ─── WhatsApp Connection ──────────────────────────────────
-let reconnectAttempts = 0;
-const MAX_RECONNECT = 5;
+// ─── Shared connection listener ───────────────────────────
+function attachConnectionListener() {
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    if (connection === 'open') {
+      isConnected = true;
+      reconnectAttempts = 0;
+      addLog(`Brainbox: Connected as ${sock.user?.name || sock.user?.id}`);
+      broadcast({ type: 'connected', name: sock.user?.name });
 
-async function connectWhatsApp(phoneNumber = null) {
+    } else if (connection === 'connecting') {
+      addLog('Brainbox: Connecting to WhatsApp...');
+
+    } else if (connection === 'close') {
+      isConnected = false;
+      broadcast({ type: 'disconnected' });
+      const code = lastDisconnect?.error?.output?.statusCode;
+      addLog(`Brainbox: Disconnected (code: ${code ?? 'unknown'})`);
+
+      if (code === DisconnectReason.loggedOut) {
+        addLog('Brainbox: Logged out. Re-pair via dashboard.');
+        if (fs.existsSync('auth_info')) fs.rmSync('auth_info', { recursive: true, force: true });
+        return;
+      }
+      if (reconnectAttempts < MAX_RECONNECT) {
+        reconnectAttempts++;
+        const delay = reconnectAttempts * 7000;
+        addLog(`Brainbox: Reconnect ${reconnectAttempts}/${MAX_RECONNECT} in ${delay/1000}s...`);
+        await sleep(delay);
+        connectWhatsApp();
+      } else {
+        addLog('Brainbox: Max reconnects hit. Re-pair via dashboard.');
+        reconnectAttempts = 0;
+      }
+    }
+  });
+}
+
+// ─── Normal reconnect (existing session) ─────────────────
+async function connectWhatsApp() {
+  killSocket();
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   const { version } = await fetchLatestBaileysVersion();
-
-  const logger = pino({ level: 'silent' }); // Suppress Baileys internal logs
+  const logger = pino({ level: 'silent' });
 
   sock = makeWASocket({
     version,
-    auth: {
-      creds: state.creds,
-      keys: makeCacheableSignalKeyStore(state.keys, logger)
-    },
-    printQRInTerminal: false,
+    auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
     logger,
-    browser: ['Brainbox Store', 'Chrome', '120.0.6099.109'],
-    markOnlineOnConnect: false, // Stay offline-looking
+    printQRInTerminal: false,
+    browser: ['Brainbox Store', 'Chrome', '124.0.0.0'],
+    markOnlineOnConnect: false,
     syncFullHistory: false
   });
 
   sock.ev.on('creds.update', saveCreds);
-
-  sock.ev.on('connection.update', async (update) => {
-    const { connection, lastDisconnect } = update;
-
-    if (connection === 'close') {
-      isConnected = false;
-      broadcast({ type: 'disconnected' });
-
-      const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      log(`Brainbox: Connection closed (code: ${statusCode}). Reconnect: ${shouldReconnect}`);
-
-      if (shouldReconnect && reconnectAttempts < MAX_RECONNECT) {
-        reconnectAttempts++;
-        const backoff = reconnectAttempts * 8000; // 8s, 16s, 24s...
-        log(`Brainbox: Reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT} in ${backoff/1000}s...`);
-        await sleep(backoff);
-        connectWhatsApp();
-      } else if (reconnectAttempts >= MAX_RECONNECT) {
-        log('Brainbox: Max reconnects reached. Please re-pair via dashboard.');
-        reconnectAttempts = 0;
-      } else {
-        log('Brainbox: Logged out. Please re-authenticate via the dashboard.');
-        // Clear auth on logout
-        if (fs.existsSync('auth_info')) {
-          fs.rmSync('auth_info', { recursive: true, force: true });
-        }
-      }
-    } else if (connection === 'open') {
-      isConnected = true;
-      reconnectAttempts = 0; // Reset on successful connect
-      log(`Brainbox: WhatsApp connected ✓ | Logged in as ${sock.user?.name || sock.user?.id}`);
-      broadcast({ type: 'connected', name: sock.user?.name });
-    } else if (connection === 'connecting') {
-      log('Brainbox: Connecting to WhatsApp...');
-    }
-  });
-
-  return sock;
+  attachConnectionListener();
 }
 
 // ─── Auto-Like Engine ─────────────────────────────────────
 async function runLikeCycle() {
-  if (!sock || !isRunning || !isConnected) return;
-
-  log('Brainbox: ── Starting like cycle ──');
+  if (!isRunning || !isConnected || !sock) return;
+  addLog('Brainbox: Starting like cycle...');
+  let liked = 0;
 
   try {
-    // Get your own JID
     const myJid = sock.user?.id;
-    if (!myJid) {
-      log('Brainbox: Cannot get user ID. Skipping cycle.');
-      scheduleNextCycle();
-      return;
-    }
+    if (!myJid) { addLog('Brainbox: No user ID. Skipping.'); scheduleNextCycle(); return; }
 
-    // Fetch statuses from all contacts (WhatsApp pushes these automatically)
-    // We subscribe to status updates to get the list
-    const contactsWithStatus = [];
+    const contacts = sock.store?.contacts || {};
+    const ids = Object.keys(contacts).filter(id => id.endsWith('@s.whatsapp.net') && id !== myJid);
+    addLog(`Brainbox: ${ids.length} contacts to check.`);
 
-    // Subscribe to get status list
-    await sock.sendNode({
-      tag: 'iq',
-      attrs: {
-        to: 'broadcast',
-        type: 'get',
-        xmlns: 'w:status'
-      },
-      content: [{ tag: 'status_list', attrs: {} }]
-    }).catch(() => {}); // Some versions don't support this
-
-    // Use contacts store as fallback
-    const contactStore = sock.store?.contacts || {};
-    const allContacts = Object.keys(contactStore).filter(id =>
-      id.endsWith('@s.whatsapp.net') && id !== myJid
-    );
-
-    log(`Brainbox: Found ${allContacts.length} contacts to check.`);
-
-    let likedThisCycle = 0;
-
-    for (const contactId of allContacts) {
+    for (const id of ids) {
       if (!isRunning) break;
-
       try {
-        // Fetch this contact's status
-        const statusResult = await sock.fetchStatus(contactId).catch(() => null);
-
-        if (statusResult && statusResult.status) {
-          const contactName = contactStore[contactId]?.name
-            || contactStore[contactId]?.notify
-            || contactId.split('@')[0];
-
-          // Send heart reaction to their status
-          await sock.sendMessage(`${contactId}`, {
+        const s = await sock.fetchStatus(id).catch(() => null);
+        if (s?.status) {
+          const name = contacts[id]?.name || contacts[id]?.notify || id.split('@')[0];
+          await sock.sendMessage(id, {
             react: {
               text: '❤️',
-              key: {
-                remoteJid: 'status@broadcast',
-                participant: contactId,
-                fromMe: false,
-                id: statusResult.setAt?.toString() || Date.now().toString()
-              }
+              key: { remoteJid: 'status@broadcast', participant: id, fromMe: false, id: s.setAt?.toString() || Date.now().toString() }
             }
           }).catch(() => null);
-
-          dailyCount++;
-          likedThisCycle++;
-
-          log(`Brainbox: ❤️ Liked status from ${contactName} | Daily total: ${dailyCount}`);
+          dailyCount++; liked++;
+          addLog(`Brainbox: Liked ${name}'s status | Daily: ${dailyCount}`);
           broadcast({ type: 'liked', dailyCount });
-
-          // Random delay between likes: 8–25 seconds (human-like)
-          const delay = randomDelay(8000, 25000);
-          log(`Brainbox: Waiting ${(delay / 1000).toFixed(1)}s before next like...`);
-          await sleep(delay);
+          await sleep(randomDelay(8000, 25000));
         }
-      } catch (err) {
-        // Contact has no status or inaccessible — skip silently
-      }
+      } catch (_) {}
     }
-
-    log(`Brainbox: ── Cycle complete. Liked ${likedThisCycle} statuses. Daily total: ${dailyCount} ──`);
-
-  } catch (error) {
-    log(`Brainbox: Cycle error — ${error.message}`);
+    addLog(`Brainbox: Cycle done. Liked ${liked} | Daily: ${dailyCount}`);
+  } catch (e) {
+    addLog(`Brainbox: Cycle error — ${e.message}`);
   }
-
   scheduleNextCycle();
 }
 
 function scheduleNextCycle() {
   if (!isRunning) return;
-
-  // Random interval: 45–90 minutes
-  const delay = randomDelay(2700000, 5400000);
-  const minutes = Math.floor(delay / 60000);
-  log(`Brainbox: Next cycle scheduled in ~${minutes} minutes.`);
-  cycleTimeout = setTimeout(runLikeCycle, delay);
+  const d = randomDelay(2700000, 5400000);
+  addLog(`Brainbox: Next cycle in ~${Math.floor(d/60000)} min.`);
+  cycleTimeout = setTimeout(runLikeCycle, d);
 }
 
 // ─── API Routes ───────────────────────────────────────────
 
-// Request pairing code
 app.post('/api/pair', async (req, res) => {
   let { phone } = req.body;
-
-  if (!phone) return res.json({ success: false, error: 'Phone number is required.' });
-
-  // Clean phone number - digits only
-  phone = phone.replace(/\D/g, '');
-  if (phone.startsWith('0')) {
-    phone = '234' + phone.slice(1);
-  } else if (!phone.startsWith('234')) {
-    phone = '234' + phone;
-  }
-
-  log(`Brainbox: Pairing requested for +${phone}`);
+  if (!phone) return res.json({ success: false, error: 'Phone number required.' });
+  phone = cleanPhone(phone);
+  addLog(`Brainbox: Pairing for +${phone}...`);
 
   try {
-    // Always clear old auth before fresh pair
-    if (fs.existsSync('auth_info')) {
-      fs.rmSync('auth_info', { recursive: true, force: true });
-    }
-    if (sock) {
-      try { sock.ev.removeAllListeners(); sock.end(); } catch(e) {}
-      sock = null;
-    }
+    if (fs.existsSync('auth_info')) fs.rmSync('auth_info', { recursive: true, force: true });
+    killSocket();
 
-    await connectWhatsApp(phone);
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info');
+    const { version } = await fetchLatestBaileysVersion();
+    const logger = pino({ level: 'silent' });
 
-    // Wait longer for Baileys to fully initialize websocket
-    log('Brainbox: Waiting for socket to initialize...');
-    await sleep(6000);
+    // Create socket
+    sock = makeWASocket({
+      version,
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+      logger,
+      printQRInTerminal: false,
+      browser: ['Brainbox Store', 'Chrome', '124.0.0.0'],
+      markOnlineOnConnect: false,
+      syncFullHistory: false
+    });
 
-    if (!sock) throw new Error('Socket failed to initialize.');
+    sock.ev.on('creds.update', saveCreds);
+    attachConnectionListener();
 
+    // KEY FIX: request code immediately (1.5s delay just for WS handshake to start)
+    await sleep(1500);
     const code = await sock.requestPairingCode(phone);
-    log(`Brainbox: Code generated — ${code}. Enter it in WhatsApp NOW (expires ~60s).`);
+    addLog(`Brainbox: Code sent — enter it in WhatsApp immediately (expires in ~60s).`);
     res.json({ success: true, code, phone });
 
-  } catch (error) {
-    log(`Brainbox: Pairing error — ${error.message}`);
-    res.json({ success: false, error: error.message });
+  } catch (err) {
+    addLog(`Brainbox: Pairing error — ${err.message}`);
+    res.json({ success: false, error: err.message });
   }
 });
 
-// Start engine
 app.post('/api/start', (req, res) => {
-  if (!isConnected) {
-    return res.json({ success: false, error: 'WhatsApp not connected yet.' });
-  }
-  if (isRunning) {
-    return res.json({ success: false, error: 'Engine already running.' });
-  }
-
+  if (!isConnected) return res.json({ success: false, error: 'Not connected.' });
+  if (isRunning) return res.json({ success: false, error: 'Already running.' });
   isRunning = true;
-  log('Brainbox: ✅ Auto-like engine STARTED');
+  addLog('Brainbox: Engine STARTED');
   broadcast({ type: 'engine_started' });
   runLikeCycle();
   res.json({ success: true });
 });
 
-// Stop engine
 app.post('/api/stop', (req, res) => {
   isRunning = false;
   if (cycleTimeout) clearTimeout(cycleTimeout);
-  log('Brainbox: 🛑 Auto-like engine STOPPED');
+  addLog('Brainbox: Engine STOPPED');
   broadcast({ type: 'engine_stopped' });
   res.json({ success: true });
 });
 
-// Logout
 app.post('/api/logout', async (req, res) => {
-  isRunning = false;
-  isConnected = false;
+  isRunning = false; isConnected = false;
   if (cycleTimeout) clearTimeout(cycleTimeout);
-  if (sock) {
-    await sock.logout().catch(() => {});
-    sock = null;
-  }
-  if (fs.existsSync('auth_info')) {
-    fs.rmSync('auth_info', { recursive: true, force: true });
-  }
-  log('Brainbox: Logged out. Auth cleared.');
+  try { await sock?.logout(); } catch (_) {}
+  killSocket();
+  if (fs.existsSync('auth_info')) fs.rmSync('auth_info', { recursive: true, force: true });
+  addLog('Brainbox: Logged out.');
   broadcast({ type: 'disconnected' });
   res.json({ success: true });
 });
 
-// Get all logs + status
-app.get('/api/status', (req, res) => {
-  res.json({
-    connected: isConnected,
-    running: isRunning,
-    dailyCount,
-    logs: logs.slice(-100) // Last 100 logs
-  });
-});
+app.get('/api/status', (req, res) =>
+  res.json({ connected: isConnected, running: isRunning, dailyCount, logs: logs.slice(-100) }));
 
-// Health check (keeps server alive on Railway/Render)
-app.get('/health', (req, res) => res.send('OK'));
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('/health', (_, res) => res.send('OK'));
 
-// ─── Start Server ─────────────────────────────────────────
+// ─── Server ───────────────────────────────────────────────
 const server = app.listen(PORT, () => {
-  addLog(`Brainbox: Server started on port ${PORT}`);
-  addLog('Brainbox: Open the dashboard to connect WhatsApp.');
+  addLog(`Brainbox: Server on port ${PORT}`);
+  addLog('Brainbox: Open dashboard to connect WhatsApp.');
 });
 
-server.on('upgrade', (request, socket, head) => {
-  wss.handleUpgrade(request, socket, head, (ws) => {
-    wss.emit('connection', ws, request);
-  });
-});
+server.on('upgrade', (req, socket, head) =>
+  wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req)));
 
-wss.on('connection', (ws) => {
-  // Send history + current state on connect
-  ws.send(JSON.stringify({
-    type: 'init',
-    logs: logs.slice(-100),
-    dailyCount,
-    connected: isConnected,
-    running: isRunning
-  }));
-});
+wss.on('connection', ws => ws.send(JSON.stringify({
+  type: 'init', logs: logs.slice(-100), dailyCount, connected: isConnected, running: isRunning
+})));
 
-// Auto-reconnect if auth exists on startup
+// Auto-reconnect on startup
 (async () => {
   if (fs.existsSync('auth_info')) {
-    addLog('Brainbox: Existing session found. Reconnecting...');
+    addLog('Brainbox: Session found. Reconnecting...');
     await connectWhatsApp();
   }
 })();
