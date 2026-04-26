@@ -260,27 +260,36 @@ app.post('/api/pair', async (req, res) => {
 
   if (!phone) return res.json({ success: false, error: 'Phone number is required.' });
 
-  // Clean phone number (digits only, include country code e.g. 2347012850166)
+  // Clean phone number - digits only
   phone = phone.replace(/\D/g, '');
-  if (!phone.startsWith('234')) {
-    phone = '234' + phone.replace(/^0/, '');
+  if (phone.startsWith('0')) {
+    phone = '234' + phone.slice(1);
+  } else if (!phone.startsWith('234')) {
+    phone = '234' + phone;
   }
 
   log(`Brainbox: Pairing requested for +${phone}`);
 
   try {
-    // Clear old auth if exists
+    // Always clear old auth before fresh pair
     if (fs.existsSync('auth_info')) {
       fs.rmSync('auth_info', { recursive: true, force: true });
+    }
+    if (sock) {
+      try { sock.ev.removeAllListeners(); sock.end(); } catch(e) {}
+      sock = null;
     }
 
     await connectWhatsApp(phone);
 
-    // Wait for socket to initialize
-    await sleep(3000);
+    // Wait longer for Baileys to fully initialize websocket
+    log('Brainbox: Waiting for socket to initialize...');
+    await sleep(6000);
+
+    if (!sock) throw new Error('Socket failed to initialize.');
 
     const code = await sock.requestPairingCode(phone);
-    log(`Brainbox: Pairing code generated. Enter it in WhatsApp.`);
+    log(`Brainbox: Code generated — ${code}. Enter it in WhatsApp NOW (expires ~60s).`);
     res.json({ success: true, code, phone });
 
   } catch (error) {
