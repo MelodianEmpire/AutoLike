@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Brainbox Auto-Like Dashboard</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  :root{
+    --green:#00ff88;
+    --dim:#00cc66;
+    --red:#ff4466;
+    --yellow:#ffcc00;
+    --bg:#0a0f0a;
+    --panel:#0f1a0f;
+    --border:#1a3a1a;
+  }
+  body{
+    background:var(--bg);
+    color:var(--green);
+    font-family:'Courier New',monospace;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+  }
+
+  /* ── Header ── */
+  header{
+    background:var(--panel);
+    border-bottom:1px solid var(--border);
+    padding:16px 24px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }
+  .logo{
+    font-size:1.3rem;
+    font-weight:bold;
+    letter-spacing:2px;
+  }
+  .logo span{color:#fff;}
+  .status-badge{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:.8rem;
+  }
+  .dot{
+    width:10px;height:10px;
+    border-radius:50%;
+    background:var(--red);
+    animation:none;
+  }
+  .dot.on{background:var(--green);animation:pulse 1.5s infinite;}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+
+  /* ── Layout ── */
+  main{
+    flex:1;
+    display:grid;
+    grid-template-columns:340px 1fr;
+    gap:0;
+    height:calc(100vh - 60px);
+  }
+
+  /* ── Sidebar ── */
+  sidebar{
+    background:var(--panel);
+    border-right:1px solid var(--border);
+    padding:20px;
+    display:flex;
+    flex-direction:column;
+    gap:20px;
+    overflow-y:auto;
+  }
+
+  .section-title{
+    font-size:.7rem;
+    letter-spacing:3px;
+    color:var(--dim);
+    text-transform:uppercase;
+    margin-bottom:8px;
+    border-bottom:1px solid var(--border);
+    padding-bottom:6px;
+  }
+
+  .stat-box{
+    background:#0a150a;
+    border:1px solid var(--border);
+    border-radius:4px;
+    padding:16px;
+    text-align:center;
+  }
+  .stat-number{
+    font-size:2.5rem;
+    font-weight:bold;
+    line-height:1;
+  }
+  .stat-label{
+    font-size:.7rem;
+    color:var(--dim);
+    margin-top:4px;
+    letter-spacing:1px;
+  }
+
+  /* ── Form ── */
+  .form-group{display:flex;flex-direction:column;gap:6px;}
+  label{font-size:.75rem;color:var(--dim);letter-spacing:1px;}
+  input[type="text"]{
+    background:#0a150a;
+    border:1px solid var(--border);
+    color:var(--green);
+    font-family:'Courier New',monospace;
+    font-size:.9rem;
+    padding:10px 12px;
+    border-radius:4px;
+    width:100%;
+    outline:none;
+    transition:border .2s;
+  }
+  input[type="text"]:focus{border-color:var(--green);}
+  input[type="text"]::placeholder{color:#1a3a1a;}
+
+  .btn{
+    width:100%;
+    padding:12px;
+    border:none;
+    border-radius:4px;
+    font-family:'Courier New',monospace;
+    font-size:.9rem;
+    font-weight:bold;
+    letter-spacing:2px;
+    cursor:pointer;
+    transition:all .2s;
+    text-transform:uppercase;
+  }
+  .btn-primary{background:var(--green);color:#000;}
+  .btn-primary:hover{background:#00ff99;}
+  .btn-danger{background:var(--red);color:#fff;}
+  .btn-danger:hover{background:#ff6688;}
+  .btn-warn{background:var(--yellow);color:#000;}
+  .btn-warn:hover{background:#ffdd44;}
+  .btn:disabled{opacity:.3;cursor:not-allowed;}
+
+  /* ── Pairing code display ── */
+  .code-box{
+    background:#0a150a;
+    border:1px solid var(--green);
+    border-radius:4px;
+    padding:16px;
+    text-align:center;
+    display:none;
+  }
+  .code-box.show{display:block;}
+  .code-value{
+    font-size:2rem;
+    letter-spacing:8px;
+    color:#fff;
+    font-weight:bold;
+  }
+  .code-hint{font-size:.72rem;color:var(--dim);margin-top:8px;line-height:1.5;}
+
+  /* ── Engine controls ── */
+  .engine-btns{display:flex;flex-direction:column;gap:8px;}
+
+  /* ── Terminal ── */
+  .terminal-wrap{
+    display:flex;
+    flex-direction:column;
+    height:100%;
+    overflow:hidden;
+  }
+  .terminal-header{
+    background:var(--panel);
+    border-bottom:1px solid var(--border);
+    padding:10px 20px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+  }
+  .terminal-title{
+    font-size:.75rem;
+    letter-spacing:3px;
+    color:var(--dim);
+    text-transform:uppercase;
+  }
+  .clear-btn{
+    background:none;
+    border:1px solid var(--border);
+    color:var(--dim);
+    font-family:'Courier New',monospace;
+    font-size:.7rem;
+    padding:4px 10px;
+    cursor:pointer;
+    border-radius:3px;
+  }
+  .clear-btn:hover{border-color:var(--green);color:var(--green);}
+  #terminal{
+    flex:1;
+    padding:16px 20px;
+    overflow-y:auto;
+    font-size:.8rem;
+    line-height:1.7;
+    background:var(--bg);
+  }
+  #terminal::-webkit-scrollbar{width:4px;}
+  #terminal::-webkit-scrollbar-track{background:var(--bg);}
+  #terminal::-webkit-scrollbar-thumb{background:var(--border);}
+
+  .log-line{color:var(--green);}
+  .log-line.error{color:var(--red);}
+  .log-line.info{color:var(--yellow);}
+
+  .cursor{
+    display:inline-block;
+    width:8px;height:14px;
+    background:var(--green);
+    animation:blink .8s infinite;
+    vertical-align:middle;
+    margin-left:2px;
+  }
+  @keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
+
+  /* ── Mobile ── */
+  @media(max-width:768px){
+    main{grid-template-columns:1fr;grid-template-rows:auto 1fr;}
+    sidebar{height:auto;}
+    .stat-number{font-size:1.8rem;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">BRAIN<span>BOX</span> STORE</div>
+  <div class="status-badge">
+    <div class="dot" id="connDot"></div>
+    <span id="connLabel">DISCONNECTED</span>
+  </div>
+</header>
+
+<main>
+  <sidebar>
+
+    <!-- Stats -->
+    <div>
+      <div class="section-title">Today's Stats</div>
+      <div class="stat-box">
+        <div class="stat-number" id="dailyCount">0</div>
+        <div class="stat-label">STATUSES LIKED TODAY</div>
+      </div>
+    </div>
+
+    <!-- Connect -->
+    <div>
+      <div class="section-title">WhatsApp Login</div>
+      <div class="form-group">
+        <label>Phone Number (with country code)</label>
+        <input type="text" id="phoneInput" placeholder="e.g. 2347012850166"/>
+      </div>
+      <br/>
+      <button class="btn btn-primary" id="pairBtn" onclick="requestPair()">
+        Get Pairing Code
+      </button>
+      <br/><br/>
+      <div class="code-box" id="codeBox">
+        <div class="code-hint">Enter this code in WhatsApp</div>
+        <div class="code-value" id="codeValue">----</div>
+        <div class="code-hint">
+          WhatsApp → Settings → Linked Devices<br/>
+          → Link a Device → Link with phone number
+        </div>
+      </div>
+    </div>
+
+    <!-- Engine Controls -->
+    <div>
+      <div class="section-title">Engine Control</div>
+      <div class="engine-btns">
+        <button class="btn btn-primary" id="startBtn" onclick="startEngine()" disabled>
+          ▶ Start Auto-Like
+        </button>
+        <button class="btn btn-danger" id="stopBtn" onclick="stopEngine()" disabled>
+          ■ Stop Engine
+        </button>
+        <button class="btn btn-warn" onclick="logout()" style="margin-top:8px">
+          ⏏ Logout
+        </button>
+      </div>
+    </div>
+
+    <!-- Engine Status -->
+    <div>
+      <div class="section-title">Engine Status</div>
+      <div class="stat-box">
+        <div id="engineStatus" style="color:var(--red);font-size:1rem;letter-spacing:2px">STOPPED</div>
+      </div>
+    </div>
+
+  </sidebar>
+
+  <!-- Terminal -->
+  <div class="terminal-wrap">
+    <div class="terminal-header">
+      <span class="terminal-title">Brainbox Terminal</span>
+      <button class="clear-btn" onclick="clearLogs()">CLEAR</button>
+    </div>
+    <div id="terminal">
+      <span class="cursor"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+  let ws;
+  let connected = false;
+  let running = false;
+
+  function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}`);
+
+    ws.onopen = () => {};
+
+    ws.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+
+      if (data.type === 'init') {
+        data.logs.forEach(l => appendLog(l));
+        updateDailyCount(data.dailyCount);
+        setConnected(data.connected);
+        setRunning(data.running);
+
+      } else if (data.type === 'log') {
+        appendLog(data.message);
+        updateDailyCount(data.dailyCount);
+
+      } else if (data.type === 'connected') {
+        setConnected(true);
+
+      } else if (data.type === 'disconnected') {
+        setConnected(false);
+        setRunning(false);
+
+      } else if (data.type === 'engine_started') {
+        setRunning(true);
+
+      } else if (data.type === 'engine_stopped') {
+        setRunning(false);
+
+      } else if (data.type === 'liked') {
+        updateDailyCount(data.dailyCount);
+      }
+    };
+
+    ws.onclose = () => {
+      setTimeout(connectWS, 3000); // Auto-reconnect
+    };
+  }
+
+  function appendLog(msg) {
+    const terminal = document.getElementById('terminal');
+    const line = document.createElement('div');
+    line.className = 'log-line';
+
+    if (msg.includes('Error') || msg.includes('error') || msg.includes('closed')) {
+      line.classList.add('error');
+    } else if (msg.includes('Next cycle') || msg.includes('Waiting')) {
+      line.classList.add('info');
+    }
+
+    line.textContent = msg;
+    terminal.appendChild(line);
+
+    // Auto-scroll
+    terminal.scrollTop = terminal.scrollHeight;
+  }
+
+  function updateDailyCount(count) {
+    document.getElementById('dailyCount').textContent = count;
+  }
+
+  function setConnected(state) {
+    connected = state;
+    const dot = document.getElementById('connDot');
+    const label = document.getElementById('connLabel');
+    const startBtn = document.getElementById('startBtn');
+
+    dot.className = 'dot' + (state ? ' on' : '');
+    label.textContent = state ? 'CONNECTED' : 'DISCONNECTED';
+    startBtn.disabled = !state || running;
+  }
+
+  function setRunning(state) {
+    running = state;
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const engineStatus = document.getElementById('engineStatus');
+
+    startBtn.disabled = !connected || state;
+    stopBtn.disabled = !state;
+    engineStatus.textContent = state ? 'RUNNING' : 'STOPPED';
+    engineStatus.style.color = state ? 'var(--green)' : 'var(--red)';
+  }
+
+  async function requestPair() {
+    const phone = document.getElementById('phoneInput').value.trim();
+    if (!phone) { alert('Enter your phone number first.'); return; }
+
+    document.getElementById('pairBtn').disabled = true;
+    document.getElementById('pairBtn').textContent = 'Requesting...';
+
+    const res = await fetch('/api/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone })
+    });
+    const data = await res.json();
+
+    document.getElementById('pairBtn').disabled = false;
+    document.getElementById('pairBtn').textContent = 'Get Pairing Code';
+
+    if (data.success) {
+      document.getElementById('codeValue').textContent = data.code;
+      document.getElementById('codeBox').classList.add('show');
+    } else {
+      alert('Error: ' + data.error);
+    }
+  }
+
+  async function startEngine() {
+    const res = await fetch('/api/start', { method: 'POST' });
+    const data = await res.json();
+    if (!data.success) alert('Error: ' + data.error);
+  }
+
+  async function stopEngine() {
+    await fetch('/api/stop', { method: 'POST' });
+  }
+
+  async function logout() {
+    if (!confirm('Are you sure you want to logout and clear the session?')) return;
+    await fetch('/api/logout', { method: 'POST' });
+    document.getElementById('codeBox').classList.remove('show');
+  }
+
+  function clearLogs() {
+    const terminal = document.getElementById('terminal');
+    terminal.innerHTML = '<span class="cursor"></span>';
+  }
+
+  // Init
+  connectWS();
+</script>
+</body>
+</html>
