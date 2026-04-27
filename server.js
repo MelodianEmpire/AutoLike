@@ -7,10 +7,13 @@ const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   DisconnectReason,
-  makeCacheableSignalKeyStore
+  makeCacheableSignalKeyStore,
+  makeInMemoryStore,
+  jidNormalizedUser
 } = require('@whiskeysockets/baileys');
 const WebSocket = require('ws');
 const QRCode = require('qrcode');
+const { google } = require('googleapis');
 const path = require('path');
 const fs = require('fs');
 const pino = require('pino');
@@ -26,18 +29,95 @@ let dailyCount = 0;
 let lastResetDate = new Date().toDateString();
 let isRunning = false;
 let sock = null;
-let cycleTimeout = null;
+let myJid = null;
 let isConnected = false;
 let reconnectAttempts = 0;
 const MAX_RECONNECT = 5;
 
+const logger = pino({ level: 'silent' });
+const store = makeInMemoryStore({ logger });
+
+// Saved contacts tracking
+const SAVED_FILE = 'saved_contacts.json';
+let savedContacts = new Set();
+if (fs.existsSync(SAVED_FILE)) {
+  try { savedContacts = new Set(JSON.parse(fs.readFileSync(SAVED_FILE, 'utf8'))); } catch(_) {}
+}
+function persistSaved() {
+  fs.writeFileSync(SAVED_FILE, JSON.stringify([...savedContacts]));
+}
+
+// ─── Google OAuth2 ────────────────────────────────────────
+const GTOKEN_FILE = 'google_token.json';
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_REDIRECT_URI
+);
+
+if (fs.existsSync(GTOKEN_FILE)) {
+  try { oauth2Client.setCredentials(JSON.parse(fs.readFileSync(GTOKEN_FILE, 'utf8'))); } catch(_) {}
+}
+oauth2Client.on('tokens', tokens => {
+  const current = fs.existsSync(GTOKEN_FILE)
+    ? JSON.parse(fs.readFileSync(GTOKEN_FILE, 'utf8')) : {};
+  fs.writeFileSync(GTOKEN_FILE, JSON.stringify({ ...current, ...tokens }));
+});
+
+function isGoogleAuthed() {
+  const c = oauth2Client.credentials;
+  return !!(c && (c.access_token || c.refresh_token));
+}
+
+// ─── Name Parser ──────────────────────────────────────────
+function parseContactName(rawName) {
+  if (!rawName) return null;
+  const name = rawName.trim();
+  const hasSpecial = /[$()%@#!*&^]/.test(name);
+  const hasEmoji = /\p{Emoji_Presentation}|\p{Extended_Pictographic}/u.test(name);
+  const words = name.split(/\s+/).filter(Boolean);
+
+  if (hasSpecial || (hasEmoji && words.length <= 2)) {
+    return name.charAt(0).toUpperCase() + name.slice(1);
+  }
+  if (words.length === 1) {
+    return words[0].charAt(0).toUpperCase() + words[0].slice(1).toLowerCase();
+  }
+  const realWords = words.filter(w => !/^[A-Z]{2,}$/.test(w));
+  const pool = realWords.length ? realWords : words;
+  const chosen = pool.length >= 2 ? pool[1] : pool[0];
+  return chosen.charAt(0).toUpperCase() + chosen.slice(1).toLowerCase();
+}
+
+// ─── Save to Google Contacts ──────────────────────────────
+async function saveToGoogleContacts(phone, displayName, rawName) {
+  if (!isGoogleAuthed()) {
+    addLog(`Brainbox: Google not connected — skipping ${displayName}`);
+    return false;
+  }
+  try {
+    const people = google.people({ version: 'v1', auth: oauth2Client });
+    await people.people.createContact({
+      requestBody: {
+        names: [{ givenName: displayName, displayName }],
+        phoneNumbers: [{ value: '+' + phone, type: 'mobile' }],
+        biographies: [{ value: `WhatsApp name: ${rawName}`, contentType: 'TEXT_PLAIN' }],
+        emailAddresses: []
+      }
+    });
+    addLog(`Brainbox: ✅ Saved to Google Contacts — ${displayName} (+${phone})`);
+    broadcast({ type: 'contact_saved', name: displayName, phone });
+    return true;
+  } catch (err) {
+    addLog(`Brainbox: Google save failed for ${displayName} — ${err.message}`);
+    return false;
+  }
+}
+
 // ─── WebSocket ────────────────────────────────────────────
 const wss = new WebSocket.Server({ noServer: true });
-
 function broadcast(data) {
-  wss.clients.forEach(c => {
-    if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(data));
-  });
+  wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify(data)); });
 }
 
 function addLog(msg) {
@@ -64,12 +144,11 @@ function killSocket() {
   sock = null;
 }
 
-// ─── Connect ──────────────────────────────────────────────
+// ─── WhatsApp Connect ─────────────────────────────────────
 async function connectWhatsApp() {
   killSocket();
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   const { version } = await fetchLatestBaileysVersion();
-  const logger = pino({ level: 'silent' });
 
   sock = makeWASocket({
     version,
@@ -81,31 +160,31 @@ async function connectWhatsApp() {
     syncFullHistory: false
   });
 
+  store.bind(sock.ev);
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    // QR code received — convert to image and send to dashboard
     if (qr) {
-      addLog('Brainbox: QR code ready. Scan it in WhatsApp now.');
+      addLog('Brainbox: QR ready — scan in WhatsApp now.');
       try {
-        const qrImage = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
-        broadcast({ type: 'qr', image: qrImage });
-      } catch (e) {
-        addLog('Brainbox: QR generation error — ' + e.message);
-      }
+        const img = await QRCode.toDataURL(qr, { width: 300, margin: 2 });
+        broadcast({ type: 'qr', image: img });
+      } catch (e) { addLog('Brainbox: QR error — ' + e.message); }
     }
 
     if (connection === 'open') {
       isConnected = true;
       reconnectAttempts = 0;
-      addLog(`Brainbox: Connected as ${sock.user?.name || sock.user?.id}`);
+      myJid = jidNormalizedUser(sock.user?.id);
+      addLog(`Brainbox: ✅ Connected as ${sock.user?.name || myJid}`);
       broadcast({ type: 'connected', name: sock.user?.name });
 
     } else if (connection === 'connecting') {
-      addLog('Brainbox: Connecting to WhatsApp...');
+      addLog('Brainbox: Connecting...');
 
     } else if (connection === 'close') {
       isConnected = false;
+      myJid = null;
       broadcast({ type: 'disconnected' });
       const code = lastDisconnect?.error?.output?.statusCode;
       addLog(`Brainbox: Disconnected (code: ${code ?? 'unknown'})`);
@@ -117,74 +196,112 @@ async function connectWhatsApp() {
       }
       if (reconnectAttempts < MAX_RECONNECT) {
         reconnectAttempts++;
-        const delay = reconnectAttempts * 7000;
-        addLog(`Brainbox: Reconnect ${reconnectAttempts}/${MAX_RECONNECT} in ${delay/1000}s...`);
-        await sleep(delay);
+        await sleep(reconnectAttempts * 7000);
         connectWhatsApp();
       } else {
-        addLog('Brainbox: Max reconnects hit. Click "Generate QR" on dashboard.');
+        addLog('Brainbox: Max reconnects. Generate QR again.');
         reconnectAttempts = 0;
       }
     }
   });
-}
 
-// ─── Like Engine ──────────────────────────────────────────
-async function runLikeCycle() {
-  if (!isRunning || !isConnected || !sock) return;
-  addLog('Brainbox: Starting like cycle...');
-  let liked = 0;
+  // ── Real-time status listener ─────────────────────────
+  sock.ev.on('messages.upsert', async ({ messages }) => {
+    if (!isRunning) return;
+    for (const msg of messages) {
+      if (msg.key?.remoteJid !== 'status@broadcast') continue;
+      if (msg.key?.fromMe) continue;
 
-  try {
-    const myJid = sock.user?.id;
-    if (!myJid) { addLog('Brainbox: No user ID. Skipping.'); scheduleNextCycle(); return; }
+      const senderJid = msg.key?.participant || msg.key?.remoteJid;
+      if (!senderJid) continue;
 
-    const contacts = sock.store?.contacts || {};
-    const ids = Object.keys(contacts).filter(id => id.endsWith('@s.whatsapp.net') && id !== myJid);
-    addLog(`Brainbox: ${ids.length} contacts to check.`);
+      const senderName = store.contacts[senderJid]?.name
+        || store.contacts[senderJid]?.notify
+        || senderJid.split('@')[0];
 
-    for (const id of ids) {
-      if (!isRunning) break;
+      addLog(`Brainbox: 📱 Status from ${senderName} — liking...`);
+      await sleep(rand(3000, 12000));
+
       try {
-        const s = await sock.fetchStatus(id).catch(() => null);
-        if (s?.status) {
-          const name = contacts[id]?.name || contacts[id]?.notify || id.split('@')[0];
-          await sock.sendMessage(id, {
-            react: {
-              text: '❤️',
-              key: {
-                remoteJid: 'status@broadcast',
-                participant: id, fromMe: false,
-                id: s.setAt?.toString() || Date.now().toString()
-              }
-            }
-          }).catch(() => null);
-          dailyCount++; liked++;
-          addLog(`Brainbox: Liked ${name}'s status | Daily: ${dailyCount}`);
-          broadcast({ type: 'liked', dailyCount });
-          await sleep(rand(8000, 25000));
-        }
-      } catch (_) {}
+        await sock.readMessages([msg.key]);
+        await sock.sendMessage(senderJid, {
+          react: { text: '❤️', key: msg.key }
+        });
+        dailyCount++;
+        addLog(`Brainbox: ❤️ Liked ${senderName}'s status | Daily: ${dailyCount}`);
+        broadcast({ type: 'liked', dailyCount });
+      } catch (err) {
+        addLog(`Brainbox: Like failed — ${err.message}`);
+      }
     }
-    addLog(`Brainbox: Cycle done. Liked ${liked} | Daily total: ${dailyCount}`);
+  });
+
+  // ── Auto-save new contacts to Google ─────────────────
+  sock.ev.on('contacts.upsert', async (contacts) => {
+    for (const contact of contacts) {
+      const jid = contact.id;
+      if (!jid?.endsWith('@s.whatsapp.net')) continue;
+      if (savedContacts.has(jid)) continue;
+
+      const rawName = contact.name || contact.notify || contact.verifiedName;
+      if (!rawName) continue;
+
+      const phone = jid.split('@')[0];
+      const displayName = parseContactName(rawName);
+      if (!displayName) continue;
+
+      addLog(`Brainbox: 🆕 New contact — "${rawName}" → "${displayName}"`);
+      await sleep(rand(1000, 3000));
+
+      const ok = await saveToGoogleContacts(phone, displayName, rawName);
+      if (ok) { savedContacts.add(jid); persistSaved(); }
+    }
+  });
+}
+
+// ─── Google Auth Routes ───────────────────────────────────
+app.get('/auth/google', (req, res) => {
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: ['https://www.googleapis.com/auth/contacts'],
+    login_hint: 'brainboxstores@gmail.com'
+  });
+  res.redirect(url);
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  const { code } = req.query;
+  try {
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+    fs.writeFileSync(GTOKEN_FILE, JSON.stringify(tokens));
+    addLog('Brainbox: ✅ Google Contacts connected!');
+    broadcast({ type: 'google_connected' });
+    res.send(`<html><body style="background:#0a0f0a;color:#00ff88;font-family:monospace;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;font-size:1.2rem;">
+      ✅ Google Contacts connected! You can close this tab.
+      <script>setTimeout(()=>window.close(),2000)</script>
+    </body></html>`);
   } catch (e) {
-    addLog(`Brainbox: Cycle error — ${e.message}`);
+    addLog('Brainbox: Google auth error — ' + e.message);
+    res.send('Auth failed: ' + e.message);
   }
-  scheduleNextCycle();
-}
+});
 
-function scheduleNextCycle() {
-  if (!isRunning) return;
-  const d = rand(2700000, 5400000);
-  addLog(`Brainbox: Next cycle in ~${Math.floor(d/60000)} min.`);
-  cycleTimeout = setTimeout(runLikeCycle, d);
-}
+app.get('/api/google/status', (_, res) =>
+  res.json({ connected: isGoogleAuthed() }));
 
-// ─── Routes ───────────────────────────────────────────────
+app.post('/api/google/disconnect', (_, res) => {
+  if (fs.existsSync(GTOKEN_FILE)) fs.rmSync(GTOKEN_FILE);
+  oauth2Client.revokeCredentials().catch(() => {});
+  addLog('Brainbox: Google Contacts disconnected.');
+  broadcast({ type: 'google_disconnected' });
+  res.json({ success: true });
+});
 
-// Generate fresh QR
+// ─── WhatsApp Routes ──────────────────────────────────────
 app.post('/api/qr', async (req, res) => {
-  addLog('Brainbox: Generating QR code...');
+  addLog('Brainbox: Generating QR...');
   try {
     if (fs.existsSync('auth_info')) fs.rmSync('auth_info', { recursive: true, force: true });
     await connectWhatsApp();
@@ -199,23 +316,20 @@ app.post('/api/start', (req, res) => {
   if (!isConnected) return res.json({ success: false, error: 'Not connected.' });
   if (isRunning) return res.json({ success: false, error: 'Already running.' });
   isRunning = true;
-  addLog('Brainbox: Engine STARTED');
+  addLog('Brainbox: ▶ Engine STARTED — listening for statuses in real-time');
   broadcast({ type: 'engine_started' });
-  runLikeCycle();
   res.json({ success: true });
 });
 
 app.post('/api/stop', (req, res) => {
   isRunning = false;
-  if (cycleTimeout) clearTimeout(cycleTimeout);
-  addLog('Brainbox: Engine STOPPED');
+  addLog('Brainbox: ■ Engine STOPPED');
   broadcast({ type: 'engine_stopped' });
   res.json({ success: true });
 });
 
 app.post('/api/logout', async (req, res) => {
-  isRunning = false; isConnected = false;
-  if (cycleTimeout) clearTimeout(cycleTimeout);
+  isRunning = false; isConnected = false; myJid = null;
   try { await sock?.logout(); } catch (_) {}
   killSocket();
   if (fs.existsSync('auth_info')) fs.rmSync('auth_info', { recursive: true, force: true });
@@ -225,24 +339,25 @@ app.post('/api/logout', async (req, res) => {
 });
 
 app.get('/api/status', (_, res) =>
-  res.json({ connected: isConnected, running: isRunning, dailyCount, logs: logs.slice(-100) }));
+  res.json({ connected: isConnected, running: isRunning, dailyCount,
+    googleAuthed: isGoogleAuthed(), logs: logs.slice(-100) }));
 
 app.get('/health', (_, res) => res.send('OK'));
 
 // ─── Server ───────────────────────────────────────────────
 const server = app.listen(PORT, () => {
   addLog(`Brainbox: Server on port ${PORT}`);
-  addLog('Brainbox: Click "Generate QR" on dashboard to connect.');
+  addLog('Brainbox: Open dashboard → Generate QR to connect.');
 });
 
 server.on('upgrade', (req, socket, head) =>
   wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req)));
 
 wss.on('connection', ws => ws.send(JSON.stringify({
-  type: 'init', logs: logs.slice(-100), dailyCount, connected: isConnected, running: isRunning
+  type: 'init', logs: logs.slice(-100), dailyCount,
+  connected: isConnected, running: isRunning, googleAuthed: isGoogleAuthed()
 })));
 
-// Auto-reconnect on startup if session exists
 (async () => {
   if (fs.existsSync('auth_info')) {
     addLog('Brainbox: Session found. Reconnecting...');
