@@ -6,49 +6,44 @@
 <title>Brainbox Auto-Like</title>
 <style>
   *{margin:0;padding:0;box-sizing:border-box;}
-  :root{--g:#00ff88;--dg:#00cc66;--r:#ff4466;--y:#ffcc00;--bg:#0a0f0a;--panel:#0f1a0f;--b:#1a3a1a;}
+  :root{--g:#00ff88;--dg:#00cc66;--r:#ff4466;--y:#ffcc00;--bl:#1a6aff;--bg:#0a0f0a;--panel:#0f1a0f;--b:#1a3a1a;}
   body{background:var(--bg);color:var(--g);font-family:'Courier New',monospace;min-height:100vh;display:flex;flex-direction:column;}
   header{background:var(--panel);border-bottom:1px solid var(--b);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;}
-  .logo{font-size:1.2rem;font-weight:bold;letter-spacing:2px;}
-  .logo span{color:#fff;}
+  .logo{font-size:1.2rem;font-weight:bold;letter-spacing:2px;}.logo span{color:#fff;}
   .badge{display:flex;align-items:center;gap:8px;font-size:.75rem;}
   .dot{width:10px;height:10px;border-radius:50%;background:var(--r);}
   .dot.on{background:var(--g);animation:pulse 1.5s infinite;}
   @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
-  main{flex:1;display:grid;grid-template-columns:320px 1fr;height:calc(100vh - 53px);}
-  aside{background:var(--panel);border-right:1px solid var(--b);padding:18px;display:flex;flex-direction:column;gap:18px;overflow-y:auto;}
-  .sec{font-size:.65rem;letter-spacing:3px;color:var(--dg);text-transform:uppercase;border-bottom:1px solid var(--b);padding-bottom:5px;margin-bottom:10px;}
-  .stat{background:#0a150a;border:1px solid var(--b);border-radius:4px;padding:14px;text-align:center;}
-  .num{font-size:2.2rem;font-weight:bold;}
-  .lbl{font-size:.65rem;color:var(--dg);margin-top:3px;letter-spacing:1px;}
-  .btn{width:100%;padding:11px;border:none;border-radius:4px;font-family:'Courier New',monospace;font-size:.85rem;font-weight:bold;letter-spacing:2px;cursor:pointer;transition:all .2s;text-transform:uppercase;margin-bottom:8px;}
+  main{flex:1;display:grid;grid-template-columns:300px 1fr;height:calc(100vh - 53px);}
+  aside{background:var(--panel);border-right:1px solid var(--b);padding:16px;display:flex;flex-direction:column;gap:14px;overflow-y:auto;}
+  .sec{font-size:.62rem;letter-spacing:3px;color:var(--dg);text-transform:uppercase;border-bottom:1px solid var(--b);padding-bottom:4px;margin-bottom:6px;}
+  .stat{background:#0a150a;border:1px solid var(--b);border-radius:4px;padding:12px;text-align:center;}
+  .num{font-size:2rem;font-weight:bold;}.lbl{font-size:.62rem;color:var(--dg);margin-top:3px;letter-spacing:1px;}
+  .btn{width:100%;padding:10px;border:none;border-radius:4px;font-family:'Courier New',monospace;font-size:.8rem;font-weight:bold;letter-spacing:1px;cursor:pointer;transition:all .2s;text-transform:uppercase;margin-bottom:6px;}
   .btn:last-child{margin-bottom:0;}
   .bp{background:var(--g);color:#000;}.bp:hover{background:#00ff99;}
   .br{background:var(--r);color:#fff;}.br:hover{background:#ff6688;}
   .by{background:var(--y);color:#000;}.by:hover{background:#ffdd44;}
+  .bbl{background:var(--bl);color:#fff;}.bbl:hover{background:#3a8aff;}
   .btn:disabled{opacity:.3;cursor:not-allowed;}
-  /* QR box */
-  .qr-wrap{background:#0a150a;border:1px solid var(--b);border-radius:4px;padding:14px;text-align:center;min-height:80px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;}
-  .qr-wrap img{border-radius:4px;max-width:220px;width:100%;}
-  .qr-hint{font-size:.68rem;color:var(--dg);line-height:1.6;}
-  .qr-placeholder{font-size:.75rem;color:var(--b);}
-  /* engine status */
-  .estat{background:#0a150a;border:1px solid var(--b);border-radius:4px;padding:12px;text-align:center;font-size:.95rem;letter-spacing:2px;color:var(--r);}
-  /* terminal */
+  .qr-wrap{background:#0a150a;border:1px solid var(--b);border-radius:4px;padding:12px;text-align:center;min-height:60px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;}
+  .qr-wrap img{border-radius:4px;max-width:190px;width:100%;}
+  .qr-hint{font-size:.63rem;color:var(--dg);line-height:1.5;}
+  .qr-ph{font-size:.72rem;color:var(--b);}
+  .gstat{background:#0a150a;border:1px solid var(--b);border-radius:4px;padding:10px;text-align:center;font-size:.8rem;letter-spacing:1px;}
+  .estat{background:#0a150a;border:1px solid var(--b);border-radius:4px;padding:10px;text-align:center;font-size:.88rem;letter-spacing:2px;color:var(--r);}
   .tw{display:flex;flex-direction:column;height:100%;overflow:hidden;}
   .th{background:var(--panel);border-bottom:1px solid var(--b);padding:9px 18px;display:flex;align-items:center;justify-content:space-between;}
-  .tt{font-size:.65rem;letter-spacing:3px;color:var(--dg);text-transform:uppercase;}
-  .cb{background:none;border:1px solid var(--b);color:var(--dg);font-family:'Courier New',monospace;font-size:.65rem;padding:3px 9px;cursor:pointer;border-radius:3px;}
+  .tt{font-size:.62rem;letter-spacing:3px;color:var(--dg);text-transform:uppercase;}
+  .cb{background:none;border:1px solid var(--b);color:var(--dg);font-family:'Courier New',monospace;font-size:.62rem;padding:3px 8px;cursor:pointer;border-radius:3px;}
   .cb:hover{border-color:var(--g);color:var(--g);}
-  #terminal{flex:1;padding:14px 18px;overflow-y:auto;font-size:.78rem;line-height:1.7;background:var(--bg);}
+  #terminal{flex:1;padding:14px 18px;overflow-y:auto;font-size:.77rem;line-height:1.7;background:var(--bg);}
   #terminal::-webkit-scrollbar{width:3px;}
   #terminal::-webkit-scrollbar-thumb{background:var(--b);}
-  .ll{color:var(--g);}
-  .le{color:var(--r);}
-  .li{color:var(--y);}
+  .ll{color:var(--g);}.le{color:var(--r);}.li{color:var(--y);}.lc{color:#1affcc;}
   .cur{display:inline-block;width:8px;height:13px;background:var(--g);animation:blink .8s infinite;vertical-align:middle;}
   @keyframes blink{0%,100%{opacity:1;}50%{opacity:0;}}
-  @media(max-width:700px){main{grid-template-columns:1fr;grid-template-rows:auto 1fr;}aside{max-height:55vh;}}
+  @media(max-width:680px){main{grid-template-columns:1fr;grid-template-rows:auto 1fr;}aside{max-height:60vh;}}
 </style>
 </head>
 <body>
@@ -58,34 +53,34 @@
 </header>
 <main>
 <aside>
-  <!-- Stats -->
   <div>
     <div class="sec">Today's Stats</div>
     <div class="stat"><div class="num" id="cnt">0</div><div class="lbl">STATUSES LIKED TODAY</div></div>
   </div>
 
-  <!-- QR Login -->
   <div>
     <div class="sec">WhatsApp Login</div>
-    <div class="qr-wrap" id="qrWrap">
-      <div class="qr-placeholder">Click below to generate QR</div>
-    </div>
+    <div class="qr-wrap" id="qrWrap"><div class="qr-ph">Click below to generate QR</div></div>
+    <div class="qr-hint" id="qrHint" style="display:none">WhatsApp → Settings → Linked Devices → Link a Device → Scan QR</div>
     <br/>
     <button class="btn bp" id="qrBtn" onclick="generateQR()">&#9654; Generate QR Code</button>
-    <div class="qr-hint" id="qrHint" style="display:none">
-      Open WhatsApp → Settings → Linked Devices → Link a Device → Scan this QR
-    </div>
   </div>
 
-  <!-- Engine -->
+  <div>
+    <div class="sec">Google Contacts</div>
+    <div class="gstat" id="gstat" style="color:var(--r)">NOT CONNECTED</div>
+    <br/>
+    <button class="btn bbl" id="gConnBtn" onclick="connectGoogle()">&#9654; Connect Google</button>
+    <button class="btn br" id="gDisBtn" onclick="disconnectGoogle()" style="display:none">Disconnect Google</button>
+  </div>
+
   <div>
     <div class="sec">Engine Control</div>
     <button class="btn bp" id="startBtn" onclick="startEngine()" disabled>&#9654; Start Auto-Like</button>
     <button class="btn br" id="stopBtn" onclick="stopEngine()" disabled>&#9632; Stop Engine</button>
-    <button class="btn by" onclick="logout()">&#9167; Logout</button>
+    <button class="btn by" onclick="logout()">&#9167; Logout WhatsApp</button>
   </div>
 
-  <!-- Status -->
   <div>
     <div class="sec">Engine Status</div>
     <div class="estat" id="estat">STOPPED</div>
@@ -110,37 +105,32 @@ function connectWS(){
   ws.onmessage=e=>{
     const d=JSON.parse(e.data);
     if(d.type==='init'){
-      d.logs.forEach(appendLog);
-      setCount(d.dailyCount);
-      setConn(d.connected);
-      setRun(d.running);
-    } else if(d.type==='log'){
-      appendLog(d.message);
-      setCount(d.dailyCount);
-    } else if(d.type==='qr'){
-      showQR(d.image);
-    } else if(d.type==='connected'){
-      setConn(true);
-      clearQR();
-    } else if(d.type==='disconnected'){
-      setConn(false); setRun(false);
-    } else if(d.type==='engine_started'){
-      setRun(true);
-    } else if(d.type==='engine_stopped'){
-      setRun(false);
-    } else if(d.type==='liked'){
-      setCount(d.dailyCount);
+      d.logs.forEach(l=>appendLog(l));
+      setCount(d.dailyCount); setConn(d.connected); setRun(d.running); setGoogle(d.googleAuthed);
+    } else if(d.type==='log'){ appendLog(d.message); setCount(d.dailyCount);
+    } else if(d.type==='qr'){ showQR(d.image);
+    } else if(d.type==='connected'){ setConn(true); clearQR();
+    } else if(d.type==='disconnected'){ setConn(false); setRun(false);
+    } else if(d.type==='engine_started'){ setRun(true);
+    } else if(d.type==='engine_stopped'){ setRun(false);
+    } else if(d.type==='liked'){ setCount(d.dailyCount);
+    } else if(d.type==='google_connected'){ setGoogle(true);
+    } else if(d.type==='google_disconnected'){ setGoogle(false);
+    } else if(d.type==='contact_saved'){
+      appendLog(`[CONTACT] ✅ Saved to Google: ${d.name} (+${d.phone})`, 'lc');
     }
   };
   ws.onclose=()=>setTimeout(connectWS,3000);
 }
 
-function appendLog(msg){
+function appendLog(msg, cls){
   const t=document.getElementById('terminal');
   const d=document.createElement('div');
-  d.className='ll';
-  if(msg.includes('error')||msg.includes('Error')||msg.includes('closed')) d.className='le';
-  else if(msg.includes('Next cycle')||msg.includes('Waiting')||msg.includes('min.')) d.className='li';
+  d.className = cls || (
+    msg.includes('error')||msg.includes('Error')||msg.includes('failed') ? 'le' :
+    msg.includes('Next cycle')||msg.includes('min.') ? 'li' :
+    msg.includes('CONTACT')||msg.includes('Google')||msg.includes('📇')||msg.includes('✅') ? 'lc' : 'll'
+  );
   d.textContent=msg;
   t.appendChild(d);
   t.scrollTop=t.scrollHeight;
@@ -164,24 +154,39 @@ function setRun(s){
   el.style.color=s?'var(--g)':'var(--r)';
 }
 
-function showQR(img){
-  const w=document.getElementById('qrWrap');
-  w.innerHTML=`<img src="${img}" alt="QR Code"/>`;
-  document.getElementById('qrHint').style.display='block';
+function setGoogle(s){
+  const el=document.getElementById('gstat');
+  el.textContent=s?'CONNECTED ✓':'NOT CONNECTED';
+  el.style.color=s?'var(--g)':'var(--r)';
+  document.getElementById('gConnBtn').style.display=s?'none':'block';
+  document.getElementById('gDisBtn').style.display=s?'block':'none';
 }
 
+function showQR(img){
+  document.getElementById('qrWrap').innerHTML=`<img src="${img}" alt="QR"/>`;
+  document.getElementById('qrHint').style.display='block';
+}
 function clearQR(){
-  document.getElementById('qrWrap').innerHTML='<div class="qr-placeholder">Connected ✓</div>';
+  document.getElementById('qrWrap').innerHTML='<div class="qr-ph">Connected ✓</div>';
   document.getElementById('qrHint').style.display='none';
 }
 
 async function generateQR(){
   document.getElementById('qrBtn').disabled=true;
   document.getElementById('qrBtn').textContent='Generating...';
-  document.getElementById('qrWrap').innerHTML='<div class="qr-placeholder">Loading QR...</div>';
+  document.getElementById('qrWrap').innerHTML='<div class="qr-ph">Loading...</div>';
   await fetch('/api/qr',{method:'POST'});
   document.getElementById('qrBtn').disabled=false;
   document.getElementById('qrBtn').textContent='▶ Generate QR Code';
+}
+
+function connectGoogle(){
+  window.open('/auth/google','_blank','width=500,height=600');
+}
+
+async function disconnectGoogle(){
+  if(!confirm('Disconnect Google Contacts?')) return;
+  await fetch('/api/google/disconnect',{method:'POST'});
 }
 
 async function startEngine(){
@@ -189,15 +194,12 @@ async function startEngine(){
   const d=await r.json();
   if(!d.success) alert('Error: '+d.error);
 }
-
 async function stopEngine(){ await fetch('/api/stop',{method:'POST'}); }
-
 async function logout(){
-  if(!confirm('Logout and clear session?')) return;
+  if(!confirm('Logout WhatsApp?')) return;
   await fetch('/api/logout',{method:'POST'});
   clearQR();
 }
-
 function clearLogs(){
   document.getElementById('terminal').innerHTML='<span class="cur"></span>';
 }
